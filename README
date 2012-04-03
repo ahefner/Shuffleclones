@@ -1,0 +1,7 @@
+Shuffleclones: Comparative Shuffletron
+======================================
+
+This respository is intended to collect simple reimplementations of a
+subset of the Shuffletron music play (originally written in Common
+Lisp) in various languages. Presently this has only been done for C++.
+
