@@ -568,10 +568,10 @@ void print_selection ()
 // Ensure path is absolute. Relative paths are taken relative to the CWD.
 string absolutize (string const& path)
 {
-    char buf[1024] = "";
-    getcwd(buf,sizeof(buf));
-    if ((path.size() > 0) && (path[0] == '/')) return path;
-    else return string(buf) + "/" + path;
+    char *real = realpath(path.c_str(), NULL);
+    string result(real);
+    free(real);
+    return result;
 }
 
 void play_songs (vector<Song*> const& songs)
