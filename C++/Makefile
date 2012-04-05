@@ -1,4 +1,4 @@
-CXXFLAGS+=-g -O0 -Wall
+CXXFLAGS+=-g -Wall
 LDFLAGS+=-lmpg123 -lao
 
 OBJECTS=shuffleclone.o

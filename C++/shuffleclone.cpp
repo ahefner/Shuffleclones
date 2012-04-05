@@ -25,6 +25,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <dirent.h>
+#include <wordexp.h>
 
 #include <ao/ao.h>
 #include <mpg123.h>
@@ -148,7 +149,7 @@ struct song_stream
                 return bytes_read;
 
             default:
-                printf("%s\n", mpg123_strerror(mh));
+                //cout << mpg123_strerror(mh) << endl;
                 eof = true;
                 return 0;
             }
@@ -356,11 +357,11 @@ public:
         device = ao_open_live(driver_id, &format, NULL);
 
         if (device) {
-            printf("Using audio driver \"%s\"\n", device_name);
+            cout << "Using audio driver \"" << device_name << "\"\n";
             assert(0==pthread_create(&thread, NULL, thread_main, this));
             return true;
         } else {
-            printf("Failed to open audio device \"%s\"\n", device_name);
+            cout << "Failed to open audio device \"" << device_name << "\"\n";
             return false;
         }
     }
@@ -493,11 +494,23 @@ bool match_extension (string const& filename, const char *ext)
     return (tail && !strcasecmp(tail+1,ext));
 }
 
+string realpath_string (string const& path)
+{
+    // This use of realpath is not strict POSIX, but it's a
+    // supported extension on Linux and OS X, at least.
+    char *real = realpath(path.c_str(), NULL);
+    if (real) {
+        string result(real);
+        free(real);
+        return result;
+    } else return path;
+}
+
 int scan_file (string const& pathname, const char *filename)
 {
     if (match_extension(pathname,"mp3")) {
         //cout << "Added " << pathname << endl;
-        library.push_back(new Song(pathname,filename));
+        library.push_back(new Song(realpath_string(pathname),filename));
         return 1;
     } else return 0;
 }
@@ -520,24 +533,15 @@ int scan_recursively (string const& path)
                 }
             }
         }
-    } else printf("Can't open %s\n", path.c_str());
+        closedir(dir);
+    } else cout << "Can't open \"" << path << "\"\n";
 
-    closedir(dir);
     return num_scanned;
 }
 
 bool song_compare (Song *a, Song *b)
 {
     return a->pathname < b->pathname;
-}
-
-void scan_path (string path)
-{
-    cout << "Scanning " << path << endl;
-    int n = scan_recursively(path.c_str());
-    sort(library.begin(), library.end(), song_compare);
-
-    cout << "Added " << n << " files.\n";
 }
 
 void refine_selection (string const& search_string)
@@ -563,15 +567,7 @@ void print_selection ()
         printf("% 8i:  %s\n", num, (*i)->pathname.c_str());
         num++;
     }
-}
-
-// Ensure path is absolute. Relative paths are taken relative to the CWD.
-string absolutize (string const& path)
-{
-    char *real = realpath(path.c_str(), NULL);
-    string result(real);
-    free(real);
-    return result;
+    fflush(stdout);
 }
 
 void play_songs (vector<Song*> const& songs)
@@ -670,6 +666,7 @@ void print_queue ()
     {
         printf("% 5i -- %s\n", n++, (*i)->pathname.c_str());
     }
+    fflush(stdout);
     spooler.unlock();
 }
 
@@ -690,6 +687,29 @@ void drop_command (const char *args)
     }
     spooler.set_song_queue(newqueue);
     spooler.unlock();
+}
+
+void scan_expanding_path (string const& arg)
+{
+    int n = 0;
+    wordexp_t expansion;
+    memset(&expansion, 0, sizeof(expansion));
+    int err = wordexp(arg.c_str(), &expansion, 0);
+
+    // Valgrind shows some suspicious use of uninitialized data inside
+    // wordexp on my Mac, and anecdotally, wordexp on Snow Leopard
+    // might actually be buggy, so program extra defensively here:
+    bool okay = !err && expansion.we_wordv && expansion.we_wordv[0];
+    string path = okay? expansion.we_wordv[0] : arg;
+    wordfree(&expansion);
+
+    cout << "Scanning " << path << endl;
+    n += scan_recursively(path);
+
+    sort(library.begin(), library.end(), song_compare);
+    selection = library;
+
+    cout << "Added " << n << " files.\n";
 }
 
 void dispatch_command (string cmd)
@@ -714,10 +734,7 @@ void dispatch_command (string cmd)
 
     if (name == "scan") {
         if (!has_args) cout << "Usage: scan <path to files>\n";
-        else {
-            scan_path(absolutize(args));
-            selection = library;
-        }
+        else scan_expanding_path(args);
     }
     else if (name == "ls") print_selection();
     else if (name == "quit") running = false;
@@ -770,7 +787,7 @@ int main (int argc, char *argv[])
     spooler.start();
     if (!audio_thread.start()) return 1;
 
-    printf("This is Shuffleclone.\n");
+    cout << "This is Shuffleclone.\n";
 
     for (int i=1; i<argc; i++) {
         dispatch_command(argv[i]);
@@ -780,7 +797,7 @@ int main (int argc, char *argv[])
         read_and_execute_command();
     }
 
-    printf("Goodbye.\n");
+    cout << "Goodbye.\n";
 
     audio_thread.shutdown();
     spooler.shutdown();
