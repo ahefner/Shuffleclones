@@ -100,15 +100,16 @@ Maybe<T> Nothing () { return Maybe<T>(); }
 // Normalize case and remove (most) punctuation, for search queries.
 string munge (string const& s, int strip_tail=0)
 {
-    std::ostringstream munged;
+    string munged;
+    munged.reserve(s.length());
     int n = s.length() - strip_tail;
     if (n <= 0) return "";
     for (int in=0; in<n; in++) {
         char c = std::tolower(s[in]);
-        if (std::isalnum(c) || c=='/') munged << c;
+        if (std::isalnum(c) || c=='/') munged.push_back(c);
     }
 
-    return munged.str();
+    return munged;
 }
 
 // ------------------------------------------------------------
@@ -767,6 +768,7 @@ class CStreamGarbled : public CStreamException {};
 class CacheReader {
 protected:
     ifstream stream;
+    vector<char> buffer;
 
     char read_type () {
         char x = 0;
@@ -808,7 +810,7 @@ public:
     string str () {
         if (read_type() == 's') {
             unsigned length = read_word();
-            vector<char> buffer(length);
+            buffer.resize(length);
             stream.read(&buffer[0], length);
             //string result;
             //result.assign(buffer.begin(), buffer.end());
