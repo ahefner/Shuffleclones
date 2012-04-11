@@ -20,12 +20,14 @@
 #include <fstream>
 #include <sstream>
 #include <memory>
+#include <exception>
 
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <dirent.h>
 #include <wordexp.h>
+#include <arpa/inet.h>
 
 #include <ao/ao.h>
 #include <mpg123.h>
@@ -35,6 +37,8 @@ using std::cout;
 using std::cin;
 using std::endl;
 using std::ifstream;
+using std::ofstream;
+using std::ios;
 using std::printf;
 using std::string;
 using std::vector;
@@ -51,11 +55,11 @@ struct Maybe {
     bool present;
     T value;
 
-    // I could (and probably should) define these constructors, but
-    // I'd prefer to retain POD semantics. I could be persuaded
-    // otherwise.
-    // Maybe() : present(false) {}
-    // Maybe(T value) : present(true), value(value) {}
+    Maybe() : present(false) {}
+    Maybe(T value) : present(true), value(value) {}
+
+    void set (T const& t) { value = t; present = true; }
+    void reset () { present = false; }
 
     Maybe<T>& operator= (T const& new_value) {
         value = new_value;
@@ -63,25 +67,35 @@ struct Maybe {
         return *this;
     }
 
-    void set (T t) { value = t; present = true; }
-    void reset () { present = false; }
+    Maybe<T>& operator|= (T const& new_value) {
+        value = new_value;
+        present = true;
+        return *this;
+    }
 
-    // Defaulting value: (Maybe<T> || T) => T
+    Maybe<T>& operator|= (Maybe<T> const& rhs) {
+        if (!present && (this != &rhs)) *this = rhs;
+        return *this;
+    }
+
+    // Defaulting value: (Maybe<T> | T) => T
     T operator|| (T alternative) const {
         return present? value : alternative;
     }
 
-    // Combining Maybes: (Maybe<T> || Maybe<T>) => Maybe<T>
+    // Combining: (Maybe<T> || Maybe<T>) => Maybe<T>
     Maybe<T> const& operator|| (Maybe<T> const& alternative) const {
         return present? *this : alternative;
     }
 };
 
 template <typename T>
-Maybe<T> Just (T v) { return (Maybe<T>){true,v}; }
+Maybe<T> Just (T v) { return Maybe<T>(v); }
 
 template <typename T>
-Maybe<T> Nothing () { return (Maybe<T>){false}; }
+Maybe<T> Nothing () { return Maybe<T>(); }
+
+// ------------------------------------------------------------
 
 // Normalize case and remove (most) punctuation, for search queries.
 string munge (string const& s, int strip_tail=0)
@@ -107,6 +121,9 @@ struct Song
     string pathname;            // Full path to song, including filename.
     string filename;            // File name only, not including path.
     string munged;              // Munged pathname, for searching.
+
+    Maybe<string> artist, album, title;
+    Maybe<int> track;
 
     Song(string const& pathname, string const& filename)
         : pathname(pathname),
@@ -161,6 +178,34 @@ struct song_stream
         mpg123_delete(mh);
     }
 };
+
+// ------------------------------------------------------------
+// Preferences / Storage
+
+string preferences_root ()
+{
+    const char *home = std::getenv("HOME");
+    assert(home != NULL);
+    string root = home + string("/.shuffleclone-c++");
+    mkdir(root.c_str(), 0700);
+    return root;
+}
+
+string prefpath (string pref)
+{
+    return preferences_root() + "/" + pref;
+}
+
+template <typename T>
+Maybe<T> getpref (const char *name)
+{
+    ifstream in(prefpath(name).c_str(), ifstream::in);
+    if (in.is_open()) {
+        T tmp;
+        in >> tmp;
+        return Just(tmp);
+    } else return Nothing<T>();
+}
 
 // ------------------------------------------------------------
 // Playback queue
@@ -292,11 +337,16 @@ protected:
                         long flags = MPG123_FORCE_STEREO | MPG123_QUIET;
                         mpg123_param(mh, MPG123_ADD_FLAGS, flags, 0.0);
                         mpg123_param(mh, MPG123_FORCE_RATE, 44100, 0.0);
-                        mpg123_open(mh,song->pathname.c_str());
-                        mpg123_scan(mh);
+                        if (MPG123_OK == mpg123_open(mh,song->pathname.c_str())) {
+                            mpg123_scan(mh);
+                            preloaded.reset(new song_stream(song,mh));
+                        } else {
+                            mpg123_delete(mh);
+                            mh = NULL;
+                        }
+                    }
 
-                        preloaded.reset(new song_stream(song,mh));
-                    } else {
+                    if (mh == NULL) {
                         // If there's an error opening this file, drop it
                         // from the playback queue, otherwise we're stuck
                         // waiting for it.
@@ -357,7 +407,7 @@ public:
         device = ao_open_live(driver_id, &format, NULL);
 
         if (device) {
-            cout << "Using audio driver \"" << device_name << "\"\n";
+            //cout << "Using audio driver \"" << device_name << "\"\n";
             assert(0==pthread_create(&thread, NULL, thread_main, this));
             return true;
         } else {
@@ -438,8 +488,8 @@ protected:
             unlock();
 
             // Push audio from decoder to output. The way this is
-            // written, gapless playback should "just work", but I
-            // haven't verified it.
+            // written, gapless playback should "just work", assuming
+            // the MP3 library behaves as expected.
 
             if (!ao_play(device, reinterpret_cast<char*>(buffer), bytes_available)) {
                 // Audio device error.
@@ -458,35 +508,14 @@ protected:
 } audio_thread;
 
 // ------------------------------------------------------------
-// Player UI
+// Song library
 
-bool running = true;
+// Song library, and current search selection.
 vector<Song*> library, selection;
 
-string preferences_root ()
-{
-    const char *home = std::getenv("HOME");
-    assert(home != NULL);
-    string root = home + string("/.shuffleclone");
-    mkdir(root.c_str(), 0700);
-    return home;
-}
-
-string prefpath (string pref)
-{
-    return preferences_root() + "/" + pref;
-}
-
-template <typename T>
-Maybe<T> getpref (const char *name)
-{
-    ifstream in(prefpath(name).c_str(), ifstream::in);
-    if (in.is_open()) {
-        T tmp;
-        in >> tmp;
-        return Just(tmp);
-    } else return Nothing<T>();
-}
+// Set of paths added to library, to avoid adding files twice
+// (e.g. via symlinks).
+set<string> unique_paths;
 
 bool match_extension (string const& filename, const char *ext)
 {
@@ -506,15 +535,101 @@ string realpath_string (string const& path)
     } else return path;
 }
 
+Maybe<string> id3v1string (char field[30])
+{
+    char buffer[31];
+    memset(buffer, 0, sizeof(buffer));
+    memcpy(buffer, field, 30);
+    if (buffer[0]) return Just<string>(buffer);
+    else return Nothing<string>();
+}
+
+Maybe<string> id3v2_string (mpg123_string *text)
+{
+    if (text && text->p) return Just<string>(text->p);
+    else return Nothing<string>();
+}
+
+Maybe<int> id3v2_track_number (mpg123_id3v2 *v2)
+{
+    for (size_t i=0; i<v2->texts; i++) {
+        mpg123_text const& text = v2->text[i];
+        if ((text.id[0] == 'T') && (text.id[1] == 'R') &&
+            (text.id[2] == 'C') && (text.id[3] == 'K') &&
+            (text.text.p != NULL)) {
+            int n = std::atoi(text.text.p);
+            if ((n > 0) && (n <= 99)) return Maybe<int>(n);
+        }
+    }
+    return Nothing<int>();
+}
+
+// Verify MP3 file is readable, scan ID3 tags, and return a Song
+// object for the file.
+Song* scan_mp3_file (string const& pathname, string const& filename)
+{
+    mpg123_handle *mh = mpg123_new(NULL,NULL);
+    assert(mh != NULL);
+    mpg123_param(mh, MPG123_ADD_FLAGS, MPG123_QUIET, 0.0);
+
+    if (MPG123_OK == mpg123_open(mh,pathname.c_str())) {
+        Song *song = new Song(pathname,filename);
+        cout << "Scanning " << pathname << endl;
+
+        // Must call this first, or the tags won't have been read yet:
+        // mpg123_id3 doesn't actively seek them out, you have to get
+        // the decoder going.
+        mpg123_getformat(mh,NULL,NULL,NULL);
+
+        mpg123_id3v1 *v1 = NULL;
+        mpg123_id3v2 *v2 = NULL;
+
+        if (MPG123_OK == mpg123_id3(mh, &v1, &v2)) {
+            if (v2) {
+                song->artist |= id3v2_string(v2->artist);
+                song->title  |= id3v2_string(v2->title);
+                song->album  |= id3v2_string(v2->album);
+                song->track  |= id3v2_track_number(v2);
+            }
+
+            if (v1) {
+                song->artist |= id3v1string(v1->artist);
+                song->album  |= id3v1string(v1->album);
+                song->title  |= id3v1string(v1->title);
+            }
+        }
+
+        mpg123_delete(mh);
+        return song;
+    } else {
+        mpg123_delete(mh);
+        return NULL;
+    }
+}
+
+// Scan file tags and add Song to library. Ensures duplicates are not
+// added to the library, via unique_paths set.
 int scan_file (string const& pathname, const char *filename)
 {
-    if (match_extension(pathname,"mp3")) {
-        //cout << "Added " << pathname << endl;
-        library.push_back(new Song(realpath_string(pathname),filename));
+    Song *s = NULL;
+    string real = realpath_string(pathname);
+
+    if (unique_paths.count(real)) {
+        // cout << "Skipping duplicate " << real << endl;
+        return 0;
+    }
+
+    if (match_extension(pathname,"mp3"))
+        s = scan_mp3_file(real,filename);
+
+    if (s) {
+        library.push_back(s);
+        unique_paths.insert(real);
         return 1;
     } else return 0;
 }
 
+// Walk directory tree and add song files to the library.
 int scan_recursively (string const& path)
 {
     int num_scanned = 0;
@@ -539,9 +654,276 @@ int scan_recursively (string const& path)
     return num_scanned;
 }
 
-bool song_compare (Song *a, Song *b)
+bool song_library_ordering (Song *a, Song *b)
 {
     return a->pathname < b->pathname;
+}
+
+void scan_expanding_path (string const& arg)
+{
+    int n = 0;
+    wordexp_t expansion;
+    memset(&expansion, 0, sizeof(expansion));
+    int err = wordexp(arg.c_str(), &expansion, 0);
+
+    // Valgrind shows some curious use of uninitialized data inside
+    // wordexp on my Mac, and anecdotally, wordexp on Snow Leopard
+    // might actually be buggy, so program extra defensively here:
+    bool okay = !err && expansion.we_wordv && expansion.we_wordv[0];
+    string path = okay? expansion.we_wordv[0] : arg;
+    wordfree(&expansion);
+
+    cout << "Scanning " << path << endl;
+    n += scan_recursively(path);
+
+    sort(library.begin(), library.end(), song_library_ordering);
+    selection = library;
+
+    cout << "Added " << n << " files.\n";
+}
+
+// ------------------------------------------------------------
+// Library cache
+//
+// CacheWriter and CacheReader implement typed streams of data,
+// consisting of strings and unsigned integers. The song cache is
+// implemented as an alternating sequence of integer tags and string
+// or integer values according to the tag.
+
+namespace cached {
+    // Magic type tags used in the cache file:
+    enum atom { song=0x1230, artist=0x1231, album=0x1232, title=0x1233, track=0x1234 };
+};
+
+
+class CacheWriter {
+protected:
+    ofstream stream;
+
+    void write_type (char type) {
+        stream.write(&type, sizeof(type));
+    }
+
+    void write_word (unsigned x) {
+        x = htonl(x);
+        assert(sizeof(x == 4));
+        stream.write(reinterpret_cast<const char *>(&x), sizeof(x));
+    }
+
+public:
+    CacheWriter(const char *filename) :
+        stream(filename, ios::out | ios::binary | ios::trunc)
+    {}
+
+    bool good () { return stream.good(); }
+
+    CacheWriter& uint (unsigned x) {
+        write_type('u');
+        write_word(x);
+        return *this;
+    }
+
+    CacheWriter& str (const char *ptr) {
+        write_type('s');
+        write_word(strlen(ptr));
+        stream.write(ptr, strlen(ptr));
+        return *this;
+    }
+
+    CacheWriter& str (string const& s) {
+        return str(s.c_str());
+    }
+
+    CacheWriter& tagged (cached::atom tag, string const& value) {
+        uint((unsigned)tag);
+        str(value);
+        return *this;
+    }
+
+    CacheWriter& tagged (cached::atom tag, unsigned value) {
+        uint((unsigned)tag);
+        uint(value);
+        return *this;
+    }
+
+    template <typename T>
+    CacheWriter& option (cached::atom tag, Maybe<T> const& opt) {
+        if (opt.present) {
+            tagged(tag, opt.value);
+        }
+        return *this;
+    }
+};
+
+class CStreamException : public std::exception {
+    const char *what () const throw() {
+        return "Bad data in 'songs' cache";
+    }
+};
+
+class CStreamTypeMismatch : public CStreamException {};
+class CStreamGarbled : public CStreamException {};
+
+class CacheReader {
+protected:
+    ifstream stream;
+
+    char read_type () {
+        char x = 0;
+        stream.read(&x, sizeof(x));
+        return x;
+    }
+
+    unsigned read_word () {
+        unsigned x = 0;
+        assert(sizeof(x) == 4);
+        stream.read(reinterpret_cast<char *>(&x), sizeof(x));
+        x = ntohl(x);
+        return x;
+    }
+
+public:
+    CacheReader(const char *filename) :
+        stream(filename, ios::in | ios::binary)
+    {
+        stream.exceptions(ifstream::failbit | ifstream::badbit | ifstream::eofbit);
+    }
+
+    bool good () {
+        try {
+            stream.peek();
+        }
+        catch (std::ios_base::failure) {
+            return false;
+        }
+
+        return stream.good();
+    }
+
+    unsigned uint () {
+        if (read_type() == 'u') return read_word();
+        else throw CStreamTypeMismatch();
+    }
+
+    string str () {
+        if (read_type() == 's') {
+            unsigned length = read_word();
+            vector<char> buffer(length);
+            stream.read(&buffer[0], length);
+            //string result;
+            //result.assign(buffer.begin(), buffer.end());
+            return string(buffer.begin(), buffer.end());
+        } else throw CStreamTypeMismatch();
+    }
+};
+
+string songs_path () {
+    return prefpath("songs");
+}
+
+const char *song_cache_magic_string = "Shuffleclone++ song cache!";
+
+void save_library_to_file (string const& filename)
+{
+    CacheWriter out(filename.c_str());
+    if (out.good()) {
+        out.str(song_cache_magic_string);
+        typedef vector<Song*>::const_iterator iter;
+        for (iter i=library.begin(); i!=library.end(); ++i) {
+            Song *s = *i;
+            out.tagged(cached::song, s->pathname);
+            out.str(s->filename);
+            out.option(cached::artist, s->artist);
+            out.option(cached::album, s->album);
+            out.option(cached::title, s->title);
+            out.option(cached::track, s->track);
+        }
+    } else cout << "Unable to write song cache to \"" << filename << "\"\n";
+}
+
+void load_library_from_file (string const& filename)
+{
+    try {
+        CacheReader in(filename.c_str());
+        //cout << in.str() << endl;
+        if (in.str() != song_cache_magic_string) {
+            cout << "Bogus 'songs' cache file. Rescan your music to fix this.\n";
+            return;
+        }
+
+        Song *current_song = NULL;
+
+        while (in.good()) {
+            cached::atom tag = static_cast<cached::atom>(in.uint());
+
+            switch (tag) {
+
+            case cached::song: {
+                string pathname = realpath_string(in.str());
+                string filename = in.str();
+                if (!unique_paths.count(pathname)) {
+                    current_song = new Song(pathname,filename);
+                    library.push_back(current_song);
+                    unique_paths.insert(pathname);
+                }
+                continue;
+            }
+
+            case cached::artist: {
+                string artist = in.str();
+                if (current_song) current_song->artist = artist;
+                continue;
+            }
+
+            case cached::album: {
+                string album = in.str();
+                if (current_song) current_song->album = album;
+                continue;
+            }
+
+            case cached::title: {
+                string title = in.str();
+                if (current_song) current_song->title = title;
+                continue;
+            }
+
+            case cached::track: {
+                int track = in.uint();
+                if (current_song) current_song->track = track;
+                continue;
+            }}
+
+            // Written this way so the compiler can warn if I miss a
+            // tag from the enumeration. Using 'default' would hide
+            // that.
+            cout << "Bad tag in library cache. Rescan your music to fix this.\n";
+            return;
+        }
+    }
+    catch (std::ios_base::failure)
+    {
+    }
+
+    selection = library;
+}
+
+// ------------------------------------------------------------
+// Player UI
+
+bool running = true;
+
+inline bool compare_case_insensitive (char a, char b) {
+    return tolower(a) == tolower(b);
+}
+
+bool search_insensitive (string const& s, string const& substring) {
+    return s.end() != search(s.begin(), s.end(),
+                             substring.begin(), substring.end(),
+                             compare_case_insensitive);
+}
+
+bool search_field (Maybe<string> const& field, string const& search_for) {
+    return field.present && search_insensitive(field.value, search_for);
 }
 
 void refine_selection (string const& search_string)
@@ -552,7 +934,11 @@ void refine_selection (string const& search_string)
     for (vector<Song*>::iterator i=selection.begin(); i!=selection.end(); ++i)
     {
         Song *song = *i;
-        if (song->munged.find(munged.c_str()) != string::npos) {
+        if ((song->munged.find(munged.c_str()) != string::npos)
+            || search_field(song->artist, search_string)
+            || search_field(song->album,  search_string)
+            || search_field(song->title,  search_string))
+        {
             new_selection.push_back(song);
         }
     }
@@ -565,6 +951,13 @@ void print_selection ()
     for (vector<Song*>::iterator i=selection.begin(); i!=selection.end(); ++i)
     {
         printf("% 8i:  %s\n", num, (*i)->pathname.c_str());
+
+        Song *s = *i;
+        if (s->artist.present) printf("      Artist: %s\n", s->artist.value.c_str());
+        if (s->album.present)  printf("       Album: %s\n", s->album.value.c_str());
+        if (s->title.present)  printf("       Title: %s\n", s->title.value.c_str());
+        if (s->track.present)  printf("       Track: %i\n", s->track.value);
+
         num++;
     }
     fflush(stdout);
@@ -581,6 +974,10 @@ void now_playing ()
     Song *s = audio_thread.current_song();
     if (s != NULL) {
         cout << "Now playing: " << s->pathname << endl;
+        if (s->artist.present) cout << "      Artist: " << s->artist.value << endl;
+        if (s->album.present)  cout << "       Album: " << s->album.value << endl;
+        if (s->title.present)  cout << "       Title: " << s->title.value << endl;
+        if (s->track.present)  cout << "       Track: " << s->track.value << endl;
     } else {
         cout << "Not playing.\n";
     }
@@ -689,29 +1086,6 @@ void drop_command (const char *args)
     spooler.unlock();
 }
 
-void scan_expanding_path (string const& arg)
-{
-    int n = 0;
-    wordexp_t expansion;
-    memset(&expansion, 0, sizeof(expansion));
-    int err = wordexp(arg.c_str(), &expansion, 0);
-
-    // Valgrind shows some suspicious use of uninitialized data inside
-    // wordexp on my Mac, and anecdotally, wordexp on Snow Leopard
-    // might actually be buggy, so program extra defensively here:
-    bool okay = !err && expansion.we_wordv && expansion.we_wordv[0];
-    string path = okay? expansion.we_wordv[0] : arg;
-    wordfree(&expansion);
-
-    cout << "Scanning " << path << endl;
-    n += scan_recursively(path);
-
-    sort(library.begin(), library.end(), song_compare);
-    selection = library;
-
-    cout << "Added " << n << " files.\n";
-}
-
 void dispatch_command (string cmd)
 {
     size_t split = cmd.find(' ');
@@ -734,7 +1108,10 @@ void dispatch_command (string cmd)
 
     if (name == "scan") {
         if (!has_args) cout << "Usage: scan <path to files>\n";
-        else scan_expanding_path(args);
+        else {
+            scan_expanding_path(args);
+            save_library_to_file(songs_path());
+        }
     }
     else if (name == "ls") print_selection();
     else if (name == "quit") running = false;
@@ -787,7 +1164,15 @@ int main (int argc, char *argv[])
     spooler.start();
     if (!audio_thread.start()) return 1;
 
-    cout << "This is Shuffleclone.\n";
+    load_library_from_file(songs_path());
+    if (library.size()) {
+        cout << "This is Shuffleclone.\n";
+        cout << library.size() << " songs in library." << endl;
+    } else {
+        cout << "Welcome to Shuffletron! To get started, scan some folders into\n";
+        cout << "your library using the 'scan' command, such as follows:\n\n";
+        cout << "  scan ~/music\n\n";
+    }
 
     for (int i=1; i<argc; i++) {
         dispatch_command(argv[i]);
