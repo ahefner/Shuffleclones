@@ -1170,7 +1170,7 @@ int main (int argc, char *argv[])
         cout << library.size() << " songs in library." << endl;
     } else {
         cout << "Welcome to Shuffletron! To get started, scan some folders into\n";
-        cout << "your library using the 'scan' command, such as follows:\n\n";
+        cout << "your library using the 'scan' command. For example:\n\n";
         cout << "  scan ~/music\n\n";
     }
 
