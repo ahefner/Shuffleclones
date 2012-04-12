@@ -44,6 +44,7 @@ using std::string;
 using std::vector;
 using std::deque;
 using std::set;
+using std::pair;
 using std::auto_ptr;
 
 // ------------------------------------------------------------
@@ -133,6 +134,11 @@ struct Song
     { }
 };
 
+struct seek_command {
+    enum { absolute, relative } mode;
+    long offset;
+};
+
 // A song_stream is instantiated to play a particular song. Created by
 // the spooler, consumed by the audio thread.
 struct song_stream
@@ -143,6 +149,7 @@ struct song_stream
     bool eof;
     long rate;
     int channels;
+    Maybe<seek_command> seek_to;
 
     song_stream(Song *song, mpg123_handle *mh)
         : song(song), mh(mh), paused(false), eof(false)
@@ -153,6 +160,13 @@ struct song_stream
 
     size_t read (unsigned char *buffer, size_t size)
     {
+        if (seek_to.present) {
+            mpg123_seek(mh,
+                        seek_to.value.offset * rate,
+                        seek_to.value.mode == seek_command::absolute? SEEK_SET : SEEK_CUR);
+            seek_to.reset();
+        }
+
         if (eof) return 0;
         else if (paused) return size;
         else {
@@ -209,7 +223,7 @@ Maybe<T> getpref (const char *name)
 }
 
 // ------------------------------------------------------------
-// Playback queue
+// Playback Queue / Spooler
 
 class Spooler
 {
@@ -434,6 +448,12 @@ public:
 
     void stop () {
         play(auto_ptr<song_stream>());
+    }
+
+    void seek (seek_command seek) {
+        lock();
+        if (current_stream.get()) current_stream->seek_to = seek;
+        unlock();
     }
 
     void shutdown () {
@@ -1088,6 +1108,34 @@ void drop_command (const char *args)
     spooler.unlock();
 }
 
+
+template <typename T>
+struct parsed {
+    Maybe<T> result;
+    const char *rest;
+};
+
+parsed<long> parse_long (const char *s, int base = 10) {
+    char *endptr;
+    errno = 0;
+    long x = std::strtol(s, &endptr, base);
+    if (!errno && (endptr != s)) return (parsed<long>){Just<long>(x),endptr};
+    else {
+        cout << "nothing for you.\n";
+        return (parsed<long>){Nothing<long>(),endptr};
+    }
+}
+
+void seek_current (string const& arg)
+{
+    parsed<long> p = parse_long(arg.c_str());
+    if (p.result.present) {
+        seek_command cmd = {seek_command::absolute, p.result.value};
+        if ((arg[0] == '+') || (arg[0] == '-')) cmd.mode = seek_command::relative;
+        audio_thread.seek(cmd);
+    }
+}
+
 void dispatch_command (string cmd)
 {
     size_t split = cmd.find(' ');
@@ -1121,6 +1169,7 @@ void dispatch_command (string cmd)
     else if (name == "random") play_random();
     else if (name == "shuffle") random_shuffle(selection.begin(),selection.end());
     else if (name == "now") now_playing();
+    else if (name == "seek") seek_current(args);
     else if (name == "queue") print_queue();
     else if (name == "next") audio_thread.stop();
     else if (name == "drop") drop_command(args.c_str());
