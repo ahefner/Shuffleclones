@@ -847,7 +847,7 @@ void load_library_from_file (string const& filename)
 {
     try {
         CacheReader in(filename.c_str());
-        //cout << in.str() << endl;
+
         if (in.str() != song_cache_magic_string) {
             cout << "Bogus 'songs' cache file. Rescan your music to fix this.\n";
             return;
@@ -1162,11 +1162,11 @@ int main (int argc, char *argv[])
     srand(time(NULL));
     mpg123_init();
     ao_initialize();
-
     spooler.start();
     if (!audio_thread.start()) return 1;
 
     load_library_from_file(songs_path());
+
     if (library.size()) {
         cout << "This is Shuffleclone.\n";
         cout << library.size() << " songs in library." << endl;
@@ -1188,7 +1188,6 @@ int main (int argc, char *argv[])
 
     audio_thread.shutdown();
     spooler.shutdown();
-
     free_library();
     ao_shutdown();
     mpg123_exit();
