@@ -224,6 +224,11 @@ Maybe<T> getpref (const char *name)
 
 // ------------------------------------------------------------
 // Playback Queue / Spooler
+//
+// The Spooler holds the (double-ended) queue of songs the user has
+// arranged to play, and is responsible for readying an audio stream
+// corresponding to the song at the head of the queue which can be
+// immediately handed off upon request of the audio thread.
 
 class Spooler
 {
