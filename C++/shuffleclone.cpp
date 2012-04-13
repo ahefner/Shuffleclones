@@ -1025,25 +1025,10 @@ void play_songs (vector<Song*> const& songs)
 
 // Print time in seconds, in format [hh:]mm:ss
 string format_seconds (int n) {
-    std::ostringstream out;
-    if (n < 0) {
-        out << "-";
-        n = -n;
-    }
-    int hours = n / 3600;
-    n %= 3600;
-    out << std::setfill('0');
-    if (hours) {
-        out << hours << ":";
-        out << std::setw(2);
-    }
-    int minutes = n / 60;
-    n %= 60;
-    out << minutes;
-    out << ":";
-    out << std::setw(2);
-    out << n;
-    return out.str();
+    char buf[32];
+    if (n < 3600) snprintf(buf, sizeof(buf), "%i:%02i", n/60, n%60);
+    else snprintf(buf, sizeof(buf), "%i:%02i:%02i", n/3600, (n%3600)/60, n%60);
+    return buf;
 }
 
 // Test cases for time formatting.
