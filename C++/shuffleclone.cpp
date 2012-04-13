@@ -1023,15 +1023,9 @@ void play_songs (vector<Song*> const& songs)
     audio_thread.stop();
 }
 
-struct seconds {
-    int n;
-    seconds(int n) : n(n) {}
-};
-
 // Print time in seconds, in format [hh:]mm:ss
-std::ostream& operator<< (std::ostream &stream, seconds s) {
+string format_seconds (int n) {
     std::ostringstream out;
-    int n = s.n;
     if (n < 0) {
         out << "-";
         n = -n;
@@ -1049,19 +1043,18 @@ std::ostream& operator<< (std::ostream &stream, seconds s) {
     out << ":";
     out << std::setw(2);
     out << n;
-    stream << out.str();
-    return stream;
+    return out.str();
 }
 
 // Test cases for time formatting.
 struct seconds_format_test {
+    class test_failure : public std::exception {};
     void test (int n, const char *match) {
-        std::ostringstream out;
-        out << seconds(n);
-        //cout << out.str() << " " << match << endl;
-        if (out.str() != match) {
-            std::cerr << "Got " << out.str() << ", expected " << match << endl;
-            assert(out.str() == match);
+        string s = format_seconds(n);
+        //cout << s << " " << match << endl;
+        if (s != match) {
+            std::cerr << n << " printed as " << s << ", expected " << match << endl;
+            throw test_failure();
         }
     }
     seconds_format_test() {
@@ -1088,8 +1081,8 @@ void now_playing ()
     Maybe<AudioThread::state_description> state = audio_thread.current_state();
     if (state.present) {
         Song *s = state.value.current_song;
-        cout << " [" << seconds(state.value.time) << "/"
-             << seconds(state.value.length) << "] "
+        cout << " [" << format_seconds(state.value.time) << "/"
+             << format_seconds(state.value.length) << "] "
              << "Now playing: " << s->pathname << endl;
         if (s->artist.present) cout << "      Artist: " << s->artist.value << endl;
         if (s->album.present)  cout << "       Album: " << s->album.value << endl;
