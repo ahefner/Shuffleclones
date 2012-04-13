@@ -17,6 +17,7 @@
 #include <deque>
 #include <set>
 #include <iostream>
+#include <iomanip>
 #include <fstream>
 #include <sstream>
 #include <memory>
@@ -147,12 +148,16 @@ struct song_stream
     mpg123_handle *mh;
     bool paused;
     bool eof;
+    long long time_samples;
+    long long length_samples;
     long rate;
     int channels;
     Maybe<seek_command> seek_to;
 
     song_stream(Song *song, mpg123_handle *mh)
-        : song(song), mh(mh), paused(false), eof(false)
+        : song(song), mh(mh), paused(false), eof(false),
+          time_samples(0),
+          length_samples(mpg123_length(mh))
     {
         int encoding;
         mpg123_getformat(mh,&rate,&channels,&encoding);
@@ -161,23 +166,28 @@ struct song_stream
     size_t read (unsigned char *buffer, size_t size)
     {
         if (seek_to.present) {
-            mpg123_seek(mh,
-                        seek_to.value.offset * rate,
-                        seek_to.value.mode == seek_command::absolute? SEEK_SET : SEEK_CUR);
+            off_t sampleoff = seek_to.value.offset * rate;
+            int whence = seek_to.value.mode == seek_command::absolute? SEEK_SET : SEEK_CUR;
+            mpg123_seek(mh, sampleoff, whence);
             seek_to.reset();
+            time_samples = mpg123_tell(mh);
         }
 
         if (eof) return 0;
         else if (paused) return size;
         else {
+            const int bytes_per_sample = 4;
             size_t bytes_read;
+            size_t samples_read = bytes_read / bytes_per_sample;
             int code = mpg123_read(mh, buffer, size, &bytes_read);
             switch (code) {
             case MPG123_DONE:
                 eof = true;
+                time_samples += samples_read;
                 return bytes_read;
 
             case MPG123_OK:
+                time_samples += samples_read;
                 return bytes_read;
 
             default:
@@ -275,7 +285,6 @@ public:
     void assert_locked () {
         assert(pthread_mutex_trylock(&mutex) == EBUSY);
     }
-
 
     void start () {
         assert(0==pthread_create(&thread, NULL, thread_main, this));
@@ -477,14 +486,32 @@ public:
         unlock();
     }
 
-    Song* current_song () {
-        Song *song = NULL;
+    struct state_description {
+        Song *current_song;
+        bool paused;
+        long long time_samples;
+        long long length_samples;
+        double time;
+        double length;
+    };
+
+    Maybe<state_description> current_state () {
+        Maybe<state_description> sd;
 
         lock();
-        if (current_stream.get()) song = current_stream->song;
+        if (current_stream.get()) {
+            state_description d;
+            d.current_song = current_stream->song;
+            d.paused = current_stream->paused;
+            d.time_samples = current_stream->time_samples;
+            d.time = d.time_samples / (float)current_stream->rate;
+            d.length_samples = current_stream->length_samples;
+            d.length = d.length_samples / (float)current_stream->rate;
+            sd.set(d);
+        }
         unlock();
 
-        return song;
+        return sd;
     }
 
 protected:
@@ -996,11 +1023,74 @@ void play_songs (vector<Song*> const& songs)
     audio_thread.stop();
 }
 
+struct seconds {
+    int n;
+    seconds(int n) : n(n) {}
+};
+
+// Print time in seconds, in format [hh:]mm:ss
+std::ostream& operator<< (std::ostream &stream, seconds s) {
+    std::ostringstream out;
+    int n = s.n;
+    if (n < 0) {
+        out << "-";
+        n = -n;
+    }
+    int hours = n / 3600;
+    n %= 3600;
+    out << std::setfill('0');
+    if (hours) {
+        out << hours << ":";
+        out << std::setw(2);
+    }
+    int minutes = n / 60;
+    n %= 60;
+    out << minutes;
+    out << ":";
+    out << std::setw(2);
+    out << n;
+    stream << out.str();
+    return stream;
+}
+
+// Test cases for time formatting.
+struct seconds_format_test {
+    void test (int n, const char *match) {
+        std::ostringstream out;
+        out << seconds(n);
+        //cout << out.str() << " " << match << endl;
+        if (out.str() != match) {
+            std::cerr << "Got " << out.str() << ", expected " << match << endl;
+            assert(out.str() == match);
+        }
+    }
+    seconds_format_test() {
+        test(  0,"0:00"), test(  1,"0:01"), test(  9,"0:09"), test( 10,"0:10");
+        test( 11,"0:11"), test( 19,"0:19"), test( 20,"0:20"), test( 59,"0:59");
+        test( 60,"1:00"), test( 61,"1:01"), test( 69,"1:09"), test( 70,"1:10");
+        test( 71,"1:11"), test(119,"1:59"), test(120,"2:00"), test(121,"2:01");
+        test(129,"2:09"), test(130,"2:10"), test(131,"2:11"), test(179,"2:59");
+        test(180,"3:00"), test(599,"9:59"), test(600,"10:00"),test(601,"10:01");
+        test(609,"10:09"),test(610,"10:10"),test(611,"10:11"),test(659,"10:59");
+        test(660,"11:00"),test(661,"11:01"),test(670,"11:10"),test(690,"11:30");
+        test(3540,"59:00"), test(3543,"59:03"), test(3597,"59:57");
+        test(3600,"1:00:00"), test(3601,"1:00:01"), test(3610,"1:00:10");
+        test(3650,"1:00:50"), test(3659,"1:00:59"), test(3660,"1:01:00");
+        test(3669,"1:01:09"), test(3719,"1:01:59"), test(3720,"1:02:00");
+        test(3721,"1:02:01"), test(3779,"1:02:59"), test(4199,"1:09:59");
+        test(4200,"1:10:00"), test(4209,"1:10:09"), test(4210,"1:10:10");
+        test(7199,"1:59:59"), test(7200,"2:00:00"), test(37230, "10:20:30");
+    }
+} _seconds_format_test_;
+
 void now_playing ()
 {
-    Song *s = audio_thread.current_song();
-    if (s != NULL) {
-        cout << "Now playing: " << s->pathname << endl;
+    Maybe<AudioThread::state_description> state = audio_thread.current_state();
+    if (state.present) {
+        Song *s = state.value.current_song;
+        cout << " [" << seconds(state.value.time) << "/"
+             << seconds(state.value.length) << "] "
+             << "Now playing: " << s->pathname << endl;
         if (s->artist.present) cout << "      Artist: " << s->artist.value << endl;
         if (s->album.present)  cout << "       Album: " << s->album.value << endl;
         if (s->title.present)  cout << "       Title: " << s->title.value << endl;
