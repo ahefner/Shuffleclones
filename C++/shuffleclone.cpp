@@ -1061,6 +1061,14 @@ struct seconds_format_test {
     }
 } _seconds_format_test_;
 
+void describe_metadata (Song *s)
+{
+    if (s->artist.present) cout << "      Artist: " << s->artist.value << endl;
+    if (s->album.present)  cout << "       Album: " << s->album.value << endl;
+    if (s->title.present)  cout << "       Title: " << s->title.value << endl;
+    if (s->track.present)  cout << "       Track: " << s->track.value << endl;
+}
+
 void now_playing ()
 {
     Maybe<AudioThread::state_description> state = audio_thread.current_state();
@@ -1069,10 +1077,7 @@ void now_playing ()
         cout << " [" << format_seconds(state.value.time) << "/"
              << format_seconds(state.value.length) << "] "
              << "Now playing: " << s->pathname << endl;
-        if (s->artist.present) cout << "      Artist: " << s->artist.value << endl;
-        if (s->album.present)  cout << "       Album: " << s->album.value << endl;
-        if (s->title.present)  cout << "       Title: " << s->title.value << endl;
-        if (s->track.present)  cout << "       Track: " << s->track.value << endl;
+        describe_metadata(state.value.current_song);
     } else {
         cout << "Not playing.\n";
     }
@@ -1085,6 +1090,7 @@ void play_random ()
         v.push_back(selection[rand() % selection.size()]);
         play_songs(v);
         cout << "Playing " << v[0]->pathname << endl;
+        describe_metadata(v[0]);
     }
 }
 
