@@ -445,8 +445,7 @@ public:
 
         // Atomically swap the current stream with the new one..
         lock();
-        unique_ptr<song_stream> old_stream;
-        old_stream = move(current_stream);
+        auto old_stream = move(current_stream);
         current_stream = move(new_stream);
         unlock();
 
@@ -1127,7 +1126,7 @@ vector<int> parse_ranges (const char *args, int minimum, int maximum)
 
 vector<Song*> parse_selected (const char *args)
 {
-    vector<int> choices = parse_ranges(args, 1, selection.size());
+    auto choices = parse_ranges(args, 1, selection.size());
     vector<Song *> songs;
     for (auto n : choices) {
         assert(n >= 1);
@@ -1151,7 +1150,7 @@ void print_queue ()
 {
     spooler.lock();
     int n = 1;
-    deque<Song*> const& queue = spooler.get_song_queue();
+    auto queue = spooler.get_song_queue();
     for (auto song : queue)
     {
         printf("% 5i -- %s\n", n++, song->pathname.c_str());
@@ -1163,8 +1162,8 @@ void print_queue ()
 void drop_command (const char *args)
 {
     spooler.lock();
-    deque<Song*>& d = spooler.get_song_queue();
-    vector<int> choices = parse_ranges(args,1,d.size());
+    auto d = spooler.get_song_queue();
+    auto choices = parse_ranges(args,1,d.size());
     set<int> choice_set(choices.begin(),choices.end());
 
     deque<Song*> newqueue;
