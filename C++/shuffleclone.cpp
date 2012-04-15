@@ -46,7 +46,8 @@ using std::vector;
 using std::deque;
 using std::set;
 using std::pair;
-using std::auto_ptr;
+using std::unique_ptr;
+using std::move;
 
 // ------------------------------------------------------------
 // Supporting definitions
@@ -248,7 +249,7 @@ class Spooler
 
     deque<Song *> song_queue;
     bool running;
-    auto_ptr<song_stream> preloaded;
+    unique_ptr<song_stream> preloaded;
 
     // Disable copy/assignment.
     Spooler(Spooler const&);
@@ -326,11 +327,11 @@ public:
     }
 
     // Polled by the audio thread to get the next song. Must not block.
-    auto_ptr<song_stream> pop_next () {
+    unique_ptr<song_stream> pop_next () {
         if (!pthread_mutex_trylock(&mutex)) {
 
-            auto_ptr<song_stream> popped;
-            popped = preloaded;
+            unique_ptr<song_stream> popped;
+            popped = move(preloaded);
 
             if (popped.get()) {
                 assert(popped->song == song_queue.front());
@@ -339,7 +340,7 @@ public:
 
             unlock();
             return popped;
-        } else return auto_ptr<song_stream>();
+        } else return unique_ptr<song_stream>();
     }
 
 protected:
@@ -407,7 +408,7 @@ class AudioThread
     bool requested_shutdown;
     ao_device *device;
 
-    auto_ptr<song_stream> current_stream;
+    unique_ptr<song_stream> current_stream;
 
     // Disable copy/assignment.
     AudioThread(AudioThread const&);
@@ -445,23 +446,23 @@ public:
         }
     }
 
-    void play (auto_ptr<song_stream> new_stream) {
+    void play (unique_ptr<song_stream> new_stream) {
 
         // Atomically swap the current stream with the new one..
         lock();
-        auto_ptr<song_stream> old_stream;
-        old_stream = current_stream;
-        current_stream = new_stream;
+        unique_ptr<song_stream> old_stream;
+        old_stream = move(current_stream);
+        current_stream = move(new_stream);
         unlock();
 
         // When we exit this scope, the old_stream gets freed by the
-        // auto_ptr. I specifically wanted this to occur outside the
+        // unique_ptr. I specifically wanted this to occur outside the
         // lock, so as to not block the audio thread, in case for some
         // reason it takes longer than it should.
     }
 
     void stop () {
-        play(auto_ptr<song_stream>());
+        play(unique_ptr<song_stream>());
     }
 
     void seek (seek_command seek) {
