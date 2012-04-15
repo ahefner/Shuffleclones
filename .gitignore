@@ -1,1 +1,6 @@
 *~
+*.o
+gmon.out
+shuffleclone
+log
+
