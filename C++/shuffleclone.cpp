@@ -178,8 +178,8 @@ struct song_stream
         else {
             const int bytes_per_sample = 4;
             size_t bytes_read;
-            size_t samples_read = bytes_read / bytes_per_sample;
             int code = mpg123_read(mh, buffer, size, &bytes_read);
+            size_t samples_read = bytes_read / bytes_per_sample;
             switch (code) {
             case MPG123_DONE:
                 eof = true;
