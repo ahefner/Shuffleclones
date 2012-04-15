@@ -300,19 +300,14 @@ public:
     }
 
     void prequeue (vector<Song*> const& songs) {
-        typedef vector<Song*>::const_reverse_iterator iter;
         lock();
-        for (iter i=songs.rbegin(); i!=songs.rend(); ++i) {
-            song_queue.push_front(*i);
-        }
+        for (auto i=songs.rbegin(); i!=songs.rend(); ++i) song_queue.push_front(*i);
         unlock();
     }
 
     void enqueue (vector<Song*> const& songs) {
         lock();
-        for (vector<Song*>::const_iterator i=songs.begin(); i!=songs.end(); ++i) {
-            song_queue.push_back(*i);
-        }
+        for (auto song : songs) song_queue.push_back(song);
         unlock();
     }
 
@@ -883,9 +878,7 @@ void save_library_to_file (string const& filename)
     CacheWriter out(filename.c_str());
     if (out.good()) {
         out.str(song_cache_magic_string);
-        typedef vector<Song*>::const_iterator iter;
-        for (iter i=library.begin(); i!=library.end(); ++i) {
-            Song *s = *i;
+        for (auto s : library) {
             out.tagged(cached::song, s->pathname);
             out.str(s->filename);
             out.option(cached::artist, s->artist);
@@ -986,9 +979,8 @@ void refine_selection (string const& search_string)
     vector<Song*> new_selection;
     string munged = munge(search_string);
 
-    for (vector<Song*>::iterator i=selection.begin(); i!=selection.end(); ++i)
+    for (auto song : selection)
     {
-        Song *song = *i;
         if ((song->munged.find(munged.c_str()) != string::npos)
             || search_field(song->artist, search_string)
             || search_field(song->album,  search_string)
@@ -1003,11 +995,10 @@ void refine_selection (string const& search_string)
 void print_selection ()
 {
     int num = 1;
-    for (vector<Song*>::iterator i=selection.begin(); i!=selection.end(); ++i)
+    for (auto s : selection)
     {
-        printf("% 8i:  %s\n", num, (*i)->pathname.c_str());
+        printf("% 8i:  %s\n", num, s->pathname.c_str());
 
-        Song *s = *i;
         if (s->artist.present) printf("      Artist: %s\n", s->artist.value.c_str());
         if (s->album.present)  printf("       Album: %s\n", s->album.value.c_str());
         if (s->title.present)  printf("       Title: %s\n", s->title.value.c_str());
@@ -1138,10 +1129,10 @@ vector<Song*> parse_selected (const char *args)
 {
     vector<int> choices = parse_ranges(args, 1, selection.size());
     vector<Song *> songs;
-    for (vector<int>::iterator i = choices.begin(); i!=choices.end(); ++i) {
-        assert(*i >= 1);
-        assert((unsigned)*i <= selection.size());
-        songs.push_back(selection[*i-1]);
+    for (auto n : choices) {
+        assert(n >= 1);
+        assert((unsigned)n <= selection.size());
+        songs.push_back(selection[n-1]);
     }
     return songs;
 }
@@ -1161,9 +1152,9 @@ void print_queue ()
     spooler.lock();
     int n = 1;
     deque<Song*> const& queue = spooler.get_song_queue();
-    for (deque<Song*>::const_iterator i=queue.begin(); i!=queue.end(); ++i)
+    for (auto song : queue)
     {
-        printf("% 5i -- %s\n", n++, (*i)->pathname.c_str());
+        printf("% 5i -- %s\n", n++, song->pathname.c_str());
     }
     fflush(stdout);
     spooler.unlock();
@@ -1280,10 +1271,7 @@ void read_and_execute_command ()
 
 void free_library ()
 {
-    for (vector<Song*>::iterator i=selection.begin(); i!=selection.end(); ++i)
-    {
-        delete *i;
-    }
+    for (auto song : library) delete song;
 }
 
 int main (int argc, char *argv[])
