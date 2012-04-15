@@ -1,5 +1,5 @@
 // ------------------------------------------------------------
-// Shuffleclone -- Shuffletron in C++(03).
+// Shuffleclone -- Shuffletron in C++11.
 // Description: Minimum viable music player.
 // Author: Andy Hefner <ahefner@gmail.com>
 // License: MIT-style
