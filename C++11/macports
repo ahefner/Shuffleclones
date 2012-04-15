@@ -1,0 +1,6 @@
+# This file sets the environment up for me to build on my Mac with
+# clang++ and libraries from macports.
+
+export CXX=clang++
+export CXXFLAGS=-I/opt/local/include
+export LDFLAGS=-L/opt/local/lib
