@@ -9,4 +9,7 @@ I'm keeping these in one admittedly long source file rather then breaking them u
 
 I'm not sure how far too take the feature set of these versions. I think the C++ version has gone too far, but far enough that it needs to be taken slightly farther to its logical conclusion (adding Shuffletron-style colored song listings).
 
-I'm planning to do a straight C version, at some point. This will be interesting: no RAII and no STL containers, so custom data structures and probably more UNIX-centric.
+I'm planning to do a straight C version at some point. This will be interesting: no RAII and no STL containers, so custom data structures and probably more UNIX-centric. This is the joy and the sorrow of C programming. I'm kicking around ideas for better ways to read/write the song library from disk.
+
+Some day, I'd like to do a version in OCaml.
+
