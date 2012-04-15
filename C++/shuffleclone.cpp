@@ -1279,7 +1279,7 @@ void read_and_execute_command ()
 
 void free_library ()
 {
-    for (vector<Song*>::iterator i=selection.begin(); i!=selection.end(); ++i)
+    for (vector<Song*>::iterator i=library.begin(); i!=library.end(); ++i)
     {
         delete *i;
     }
